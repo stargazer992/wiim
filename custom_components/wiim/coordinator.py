@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -15,6 +16,10 @@ from pywiim.exceptions import WiiMConnectionError, WiiMError, WiiMTimeoutError
 from pywiim.upnp.eventer import UpnpEventer
 
 _LOGGER = logging.getLogger(__name__)
+
+# Resubscribe when UPnP events stay down this long (e.g. after a network outage).
+UPNP_RESUBSCRIBE_AFTER = 120.0
+UPNP_RESUBSCRIBE_COOLDOWN = 300.0
 _PYWIIM_MISC_LOGGER_NAME = "pywiim.api.misc"
 _LED_READ_FALLBACK_MESSAGE = "LED indicator read not available for device (no API or read failed); assuming on"
 _EXPECTED_PYWIIM_LOG_FILTER_INSTALLED = False
@@ -101,6 +106,28 @@ def _isolate_artwork_enrichment(player: Player) -> None:
     manager.enrich_metadata_on_track_change = isolated
 
 
+def _drop_uri_track_source(player: Player) -> None:
+    """Ignore UPnP TrackSource values that are content URIs, not source names.
+
+    For Spotify the Ultra sends TrackSource="spotify:playlist:<id>". pywiim
+    compares it with the polled source ("spotify"), treats it as a source
+    switch and marks the new track's metadata as leftover, so polled titles
+    are dropped until the next track. HTTP is the preferred source anyway.
+    """
+    sync = getattr(player, "_state_synchronizer", None)
+    original = getattr(sync, "update_from_upnp", None)
+    if original is None:
+        return
+
+    def filtered(data: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        source = data.get("source") if isinstance(data, dict) else None
+        if isinstance(source, str) and (":" in source or "/" in source):
+            data = {k: v for k, v in data.items() if k != "source"}
+        return original(data, *args, **kwargs)
+
+    sync.update_from_upnp = filtered
+
+
 class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """WiiM coordinator - minimal glue between pywiim and Home Assistant."""
 
@@ -162,11 +189,15 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             all_players_finder=self._all_players_finder,
         )
         _isolate_artwork_enrichment(self.player)
+        _drop_uri_track_source(self.player)
 
         # Use pywiim's PollingStrategy to determine when to poll
         self._polling_strategy = PollingStrategy(self._capabilities) if self._capabilities else PollingStrategy({})
         self._refresh_in_progress = False
         self._upnp_eventer: UpnpEventer | None = None
+        self._upnp_wanted = False
+        self._upnp_stalled_since: float | None = None
+        self._upnp_last_restart = 0.0
 
     def update_capabilities(self, capabilities: dict[str, Any]) -> None:
         """Apply a refreshed capabilities mapping (e.g. after firmware change).
@@ -252,6 +283,10 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_start_upnp_events(self) -> None:
         """Subscribe to the device's UPnP events. Polling remains the fallback."""
+        self._upnp_wanted = True
+        await self._async_subscribe_upnp()
+
+    async def _async_subscribe_upnp(self) -> None:
         if self._upnp_eventer is not None:
             return
         eventer: UpnpEventer | None = None
@@ -279,6 +314,10 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_stop_upnp_events(self) -> None:
         """Unsubscribe from UPnP events."""
+        self._upnp_wanted = False
+        await self._async_unsubscribe_upnp()
+
+    async def _async_unsubscribe_upnp(self) -> None:
         eventer, self._upnp_eventer = self._upnp_eventer, None
         if eventer is None:
             return
@@ -288,6 +327,34 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await eventer.async_unsubscribe()
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("Error stopping UPnP events for %s: %s", self.player.host, err)
+
+    async def _async_check_upnp_subscription(self) -> None:
+        """Resubscribe when events stopped and auto-resubscribe did not recover.
+
+        pywiim leaves ``check_available`` set until an event arrives, so a
+        subscription lost in a network outage otherwise stays on 1 s polling.
+        """
+        if not self._upnp_wanted:
+            return
+        if self.upnp_push_active:
+            self._upnp_stalled_since = None
+            return
+        now = time.monotonic()
+        if self._upnp_stalled_since is None:
+            self._upnp_stalled_since = now
+            return
+        if now - self._upnp_stalled_since < UPNP_RESUBSCRIBE_AFTER:
+            return
+        if now - self._upnp_last_restart < UPNP_RESUBSCRIBE_COOLDOWN:
+            return
+        self._upnp_last_restart = now
+        self._upnp_stalled_since = None
+        _LOGGER.info("UPnP events from %s stopped; resubscribing", self.player.host)
+        await self._async_unsubscribe_upnp()
+        await self._async_subscribe_upnp()
+        tracker = getattr(self.player, "_upnp_health_tracker", None)
+        if tracker is not None:
+            tracker.reset_statistics()
 
     @callback
     def _on_upnp_event(self) -> None:
@@ -304,6 +371,8 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.player.refresh()
             finally:
                 self._refresh_in_progress = False
+
+            await self._async_check_upnp_subscription()
 
             # Update polling interval using pywiim's PollingStrategy
             role = self.player.role
