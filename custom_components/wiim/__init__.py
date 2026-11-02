@@ -548,6 +548,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Starting initial data fetch for %s", entry.data["host"])
         await coordinator.async_config_entry_first_refresh()
         _LOGGER.debug("Initial data fetch completed for %s", entry.data["host"])
+        entry.async_create_background_task(
+            hass, coordinator.async_start_upnp_events(), f"wiim_upnp_events_{entry.entry_id}"
+        )
 
         # Cached capabilities skip client-side detection on construction; merge any
         # new capability keys from the current pywiim (e.g. supports_subwoofer) once
@@ -851,6 +854,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry_data = hass.data[DOMAIN].pop(entry.entry_id, {})
         coordinator = entry_data.get("coordinator")
         if coordinator:
+            await coordinator.async_stop_upnp_events()
             device_name = coordinator.player.name or entry.title or "WiiM Speaker"
             _LOGGER.debug("Unloaded WiiM integration for %s", device_name)
     return unload_ok

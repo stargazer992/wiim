@@ -11,6 +11,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from pywiim import Player, PollingStrategy, WiiMClient
 from pywiim.exceptions import WiiMConnectionError, WiiMError, WiiMTimeoutError
+from pywiim.upnp.eventer import UpnpEventer
 
 _LOGGER = logging.getLogger(__name__)
 _PYWIIM_MISC_LOGGER_NAME = "pywiim.api.misc"
@@ -138,6 +139,7 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Use pywiim's PollingStrategy to determine when to poll
         self._polling_strategy = PollingStrategy(self._capabilities) if self._capabilities else PollingStrategy({})
         self._refresh_in_progress = False
+        self._upnp_eventer: UpnpEventer | None = None
 
     def update_capabilities(self, capabilities: dict[str, Any]) -> None:
         """Apply a refreshed capabilities mapping (e.g. after firmware change).
@@ -213,6 +215,58 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         self.async_update_listeners()
 
+    @property
+    def upnp_push_active(self) -> bool:
+        """Return True while UPnP events from the device are arriving."""
+        eventer = self._upnp_eventer
+        if eventer is None or eventer.check_available:
+            return False
+        return getattr(self.player, "upnp_is_healthy", None) is not False
+
+    async def async_start_upnp_events(self) -> None:
+        """Subscribe to the device's UPnP events. Polling remains the fallback."""
+        if self._upnp_eventer is not None:
+            return
+        eventer: UpnpEventer | None = None
+        try:
+            if not await self.player._ensure_upnp_client():
+                return
+            eventer = UpnpEventer(
+                self.player._upnp_client,
+                self.player,
+                getattr(self.player, "uuid", None) or self.player.host,
+                state_updated_callback=self._on_upnp_event,
+            )
+            await eventer.start()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.info("UPnP events unavailable for %s, using polling: %s", self.player.host, err)
+            if eventer is not None:
+                try:
+                    await eventer.async_unsubscribe()
+                except Exception:  # noqa: BLE001
+                    pass
+            return
+        self._upnp_eventer = eventer
+        self.player._upnp_eventer = eventer
+        _LOGGER.info("UPnP event subscription active for %s", self.player.host)
+
+    async def async_stop_upnp_events(self) -> None:
+        """Unsubscribe from UPnP events."""
+        eventer, self._upnp_eventer = self._upnp_eventer, None
+        if eventer is None:
+            return
+        if getattr(self.player, "_upnp_eventer", None) is eventer:
+            self.player._upnp_eventer = None
+        try:
+            await eventer.async_unsubscribe()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Error stopping UPnP events for %s: %s", self.player.host, err)
+
+    @callback
+    def _on_upnp_event(self) -> None:
+        """Push UPnP-driven state changes to entities."""
+        self._on_player_state_changed()
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Update coordinator data - polls device following pywiim's PollingStrategy."""
         try:
@@ -228,6 +282,9 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             role = self.player.role
             is_playing = self.player.is_playing  # pywiim v2.1.37+ provides bool directly
             optimal_interval = self._polling_strategy.get_optimal_interval(role, is_playing)
+            # Events cover track and state changes, so the 1 s playing poll is not needed.
+            if self.upnp_push_active:
+                optimal_interval = max(optimal_interval, PollingStrategy.NORMAL_POLL_INTERVAL)
             current_interval = self.update_interval.total_seconds() if self.update_interval else 5.0
             if current_interval != optimal_interval:
                 self.update_interval = timedelta(seconds=optimal_interval)

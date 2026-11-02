@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.0.116.1] - 2026-11-01
+
+### Added
+
+- **UPnP push updates**: subscribe to the device's UPnP events when the integration loads (unsubscribe on unload). Track, play state and volume changes reach Home Assistant as they happen.
+
+### Changed
+
+- **Polling while playing**: 5 s instead of 1 s while UPnP events are arriving. Falls back to 1 s automatically if the subscription fails, resubscription fails, or polling detects changes the events missed.
+
 ## [1.0.116] - 2026-10-31
 
 ### Added
