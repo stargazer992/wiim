@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.116.3] - 2026-11-01
+
+### Fixed
+
+- **Spotify title blank for a whole track with UPnP events on**: the device sends `TrackSource="spotify:playlist:<id>"`, which pywiim read as a switch away from the polled `spotify` source. It then flagged the new track's title, artist and album as leftovers and dropped them from every poll until the next track. UPnP source values that are content URIs are now ignored; the polled source is used as before.
+
 ## [1.0.116.2] - 2026-11-01
 
 ### Fixed

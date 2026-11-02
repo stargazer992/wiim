@@ -101,6 +101,28 @@ def _isolate_artwork_enrichment(player: Player) -> None:
     manager.enrich_metadata_on_track_change = isolated
 
 
+def _drop_uri_track_source(player: Player) -> None:
+    """Ignore UPnP TrackSource values that are content URIs, not source names.
+
+    For Spotify the Ultra sends TrackSource="spotify:playlist:<id>". pywiim
+    compares it with the polled source ("spotify"), treats it as a source
+    switch and marks the new track's metadata as leftover, so polled titles
+    are dropped until the next track. HTTP is the preferred source anyway.
+    """
+    sync = getattr(player, "_state_synchronizer", None)
+    original = getattr(sync, "update_from_upnp", None)
+    if original is None:
+        return
+
+    def filtered(data: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        source = data.get("source") if isinstance(data, dict) else None
+        if isinstance(source, str) and (":" in source or "/" in source):
+            data = {k: v for k, v in data.items() if k != "source"}
+        return original(data, *args, **kwargs)
+
+    sync.update_from_upnp = filtered
+
+
 class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """WiiM coordinator - minimal glue between pywiim and Home Assistant."""
 
@@ -162,6 +184,7 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             all_players_finder=self._all_players_finder,
         )
         _isolate_artwork_enrichment(self.player)
+        _drop_uri_track_source(self.player)
 
         # Use pywiim's PollingStrategy to determine when to poll
         self._polling_strategy = PollingStrategy(self._capabilities) if self._capabilities else PollingStrategy({})
