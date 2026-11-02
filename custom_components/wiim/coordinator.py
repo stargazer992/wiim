@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
@@ -75,6 +76,31 @@ def _compact_wiim_error(err: Exception) -> str:
     return str(err)
 
 
+def _isolate_artwork_enrichment(player: Player) -> None:
+    """Run pywiim artwork enrichment in its own task.
+
+    pywiim cancels the task that ran the previous enrichment. That is the
+    caller's task on the polling path, so an event-driven enrichment would
+    otherwise cancel config entry setup or a coordinator refresh.
+    """
+    manager = getattr(player, "_coverart_mgr", None)
+    original = getattr(manager, "enrich_metadata_on_track_change", None)
+    if not asyncio.iscoroutinefunction(original):
+        return
+
+    async def isolated(*args: Any, **kwargs: Any) -> None:
+        task = asyncio.get_running_loop().create_task(original(*args, **kwargs))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            _LOGGER.debug("Artwork enrichment for %s superseded by a newer one", player.host)
+
+    manager.enrich_metadata_on_track_change = isolated
+
+
 class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """WiiM coordinator - minimal glue between pywiim and Home Assistant."""
 
@@ -135,6 +161,7 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             player_finder=self._player_finder,
             all_players_finder=self._all_players_finder,
         )
+        _isolate_artwork_enrichment(self.player)
 
         # Use pywiim's PollingStrategy to determine when to poll
         self._polling_strategy = PollingStrategy(self._capabilities) if self._capabilities else PollingStrategy({})

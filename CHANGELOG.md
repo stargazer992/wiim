@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.116.2] - 2026-11-01
+
+### Fixed
+
+- **Setup cancelled with UPnP events on**: pywiim's artwork enrichment cancels the task that ran the previous enrichment, which on the polling path is the caller's own task. An event-driven enrichment could therefore cancel config entry setup ("Setup of config entry ... cancelled", subwoofer/balance entities unavailable) or a coordinator refresh. Enrichment now runs in its own task.
+
 ## [1.0.116.1] - 2026-11-01
 
 ### Added
