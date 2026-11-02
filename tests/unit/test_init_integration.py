@@ -482,6 +482,10 @@ class TestCapabilityCacheRefresh:
             async def async_config_entry_first_refresh(self):
                 return None
 
+            async def async_start_upnp_events(self):
+
+                return None
+
         monkeypatch.setattr("custom_components.wiim.WiiMCoordinator", _FakeCoordinator)
 
         # Avoid real device registry writes
@@ -557,6 +561,10 @@ class TestCapabilityCacheRefresh:
             async def async_config_entry_first_refresh(self):
                 return None
 
+            async def async_start_upnp_events(self):
+
+                return None
+
         monkeypatch.setattr("custom_components.wiim.WiiMCoordinator", _FakeCoordinator)
         monkeypatch.setattr("custom_components.wiim._register_ha_device", AsyncMock())
         hass.config_entries.async_forward_entry_setups = AsyncMock()
@@ -630,6 +638,10 @@ class TestCapabilityCacheRefresh:
             async def async_config_entry_first_refresh(self):
                 return None
 
+            async def async_start_upnp_events(self):
+
+                return None
+
         monkeypatch.setattr("custom_components.wiim.WiiMCoordinator", _FakeCoordinator)
         monkeypatch.setattr("custom_components.wiim._register_ha_device", AsyncMock())
         hass.config_entries.async_forward_entry_setups = AsyncMock()
@@ -695,6 +707,10 @@ class TestCapabilityCacheRefresh:
                 self.last_update_success = True
 
             async def async_config_entry_first_refresh(self):
+                return None
+
+            async def async_start_upnp_events(self):
+
                 return None
 
         monkeypatch.setattr("custom_components.wiim.WiiMCoordinator", _FakeCoordinator)
@@ -767,6 +783,10 @@ class TestCapabilityCacheRefresh:
                 self.last_update_success = True
 
             async def async_config_entry_first_refresh(self):
+                return None
+
+            async def async_start_upnp_events(self):
+
                 return None
 
         monkeypatch.setattr("custom_components.wiim.WiiMCoordinator", _FakeCoordinator)
@@ -843,6 +863,10 @@ class TestCapabilityCacheRefresh:
             async def async_config_entry_first_refresh(self):
                 return None
 
+            async def async_start_upnp_events(self):
+
+                return None
+
         monkeypatch.setattr("custom_components.wiim.WiiMCoordinator", _FakeCoordinator)
         monkeypatch.setattr("custom_components.wiim._register_ha_device", AsyncMock())
         hass.config_entries.async_forward_entry_setups = AsyncMock()
@@ -910,6 +934,10 @@ class TestCapabilityCacheRefresh:
                 self.last_update_success = True
 
             async def async_config_entry_first_refresh(self):
+                return None
+
+            async def async_start_upnp_events(self):
+
                 return None
 
         monkeypatch.setattr("custom_components.wiim.WiiMCoordinator", _FakeCoordinator)
