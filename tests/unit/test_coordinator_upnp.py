@@ -133,3 +133,76 @@ async def test_stop_unsubscribes(coordinator, player, eventer) -> None:
     eventer.async_unsubscribe.assert_awaited_once()
     assert player._upnp_eventer is None
     assert coordinator.upnp_push_active is False
+
+
+async def _stall(coordinator, eventer, start: float) -> None:
+    with patch.object(coordinator_module, "UpnpEventer", return_value=eventer):
+        await coordinator.async_start_upnp_events()
+    eventer.check_available = True
+    with patch.object(coordinator_module.time, "monotonic", return_value=start):
+        await coordinator._async_update_data()
+
+
+async def test_stalled_subscription_resubscribes(coordinator, player, eventer) -> None:
+    """Events that stay down past the delay trigger one fresh subscription."""
+    await _stall(coordinator, eventer, 1000.0)
+    fresh = MagicMock(start=AsyncMock(), async_unsubscribe=AsyncMock(), check_available=False)
+
+    with (
+        patch.object(coordinator_module, "UpnpEventer", return_value=fresh),
+        patch.object(coordinator_module.time, "monotonic", return_value=1000.0 + 60),
+    ):
+        await coordinator._async_update_data()
+    eventer.async_unsubscribe.assert_not_awaited()
+
+    with (
+        patch.object(coordinator_module, "UpnpEventer", return_value=fresh),
+        patch.object(
+            coordinator_module.time, "monotonic", return_value=1000.0 + coordinator_module.UPNP_RESUBSCRIBE_AFTER
+        ),
+    ):
+        await coordinator._async_update_data()
+
+    eventer.async_unsubscribe.assert_awaited_once()
+    fresh.start.assert_awaited_once()
+    player._upnp_health_tracker.reset_statistics.assert_called_once()
+    assert coordinator.upnp_push_active is True
+    assert coordinator.update_interval == timedelta(seconds=PollingStrategy.NORMAL_POLL_INTERVAL)
+
+
+async def test_resubscribe_cooldown(coordinator, eventer) -> None:
+    """A subscription that keeps failing is retried at most once per cooldown."""
+    coordinator._upnp_last_restart = 1000.0
+    await _stall(coordinator, eventer, 1000.0)
+    with patch.object(coordinator_module.time, "monotonic", return_value=1000.0 + 200):
+        await coordinator._async_update_data()
+    eventer.async_unsubscribe.assert_not_awaited()
+
+
+async def test_failed_start_is_retried(coordinator, player) -> None:
+    """A subscription that failed at setup (e.g. network down) is retried later."""
+    player._ensure_upnp_client = AsyncMock(return_value=False)
+    await coordinator.async_start_upnp_events()
+    with patch.object(coordinator_module.time, "monotonic", return_value=1000.0):
+        await coordinator._async_update_data()
+
+    player._ensure_upnp_client = AsyncMock(return_value=True)
+    fresh = MagicMock(start=AsyncMock(), async_unsubscribe=AsyncMock(), check_available=False)
+    with (
+        patch.object(coordinator_module, "UpnpEventer", return_value=fresh),
+        patch.object(coordinator_module.time, "monotonic", return_value=2000.0),
+    ):
+        await coordinator._async_update_data()
+    fresh.start.assert_awaited_once()
+
+
+async def test_no_resubscribe_after_stop(coordinator, eventer) -> None:
+    """Unloading stops the watchdog."""
+    await _stall(coordinator, eventer, 1000.0)
+    await coordinator.async_stop_upnp_events()
+    with (
+        patch.object(coordinator_module, "UpnpEventer") as cls,
+        patch.object(coordinator_module.time, "monotonic", return_value=5000.0),
+    ):
+        await coordinator._async_update_data()
+    cls.assert_not_called()

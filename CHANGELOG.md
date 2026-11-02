@@ -7,6 +7,7 @@
 ### Fixed
 
 - **Spotify title blank for a whole track with UPnP events on**: the device sends `TrackSource="spotify:playlist:<id>"`, which pywiim read as a switch away from the polled `spotify` source. It then flagged the new track's title, artist and album as leftovers and dropped them from every poll until the next track. UPnP source values that are content URIs are now ignored; the polled source is used as before.
+- **Push lost after a network outage**: when the subscription broke (pywiim logs "UPnP resubscription issue ... empty state_variables") and auto-resubscribe did not recover, the integration stayed on 1 s polling until restart. If events stay down for 2 minutes, the coordinator now unsubscribes and subscribes again (at most every 5 minutes) and resets pywiim's UPnP health statistics. A subscription that failed at setup is retried the same way.
 
 ## [1.0.116.2] - 2026-11-01
 
