@@ -115,6 +115,23 @@ async def test_playing_interval_relaxes_only_with_push(coordinator, eventer) -> 
     assert coordinator.update_interval == timedelta(seconds=PollingStrategy.FAST_POLL_INTERVAL)
 
 
+async def test_health_grace_covers_poll_interval(coordinator, player) -> None:
+    """A change pushed by an event is not counted as missed when the 5 s poll sees it 3.6 s later."""
+    from pywiim.upnp.health import UpnpHealthTracker
+
+    tracker = UpnpHealthTracker()
+    player._upnp_health_tracker = tracker
+    coordinator.update_interval = timedelta(seconds=PollingStrategy.NORMAL_POLL_INTERVAL)
+    await coordinator._async_update_data()
+    assert tracker._grace_period == PollingStrategy.NORMAL_POLL_INTERVAL + coordinator_module.UPNP_HEALTH_GRACE_MARGIN
+
+    with patch("pywiim.upnp.health.time.time", side_effect=[100.0, 103.6]):
+        tracker.on_poll_update({"title": "Old"})
+        tracker.on_upnp_event({"title": "Hallelujah"})
+        tracker.on_poll_update({"title": "Hallelujah"})
+    assert tracker.statistics["missed_changes"] == 0
+
+
 async def test_upnp_event_notifies_entities(coordinator, eventer) -> None:
     """Events push the player state to entities."""
     listener = MagicMock()

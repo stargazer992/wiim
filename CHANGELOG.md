@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.116.4] - 2026-11-03
+
+### Fixed
+
+- **False "UPnP events appear DEGRADED" while push works**: pywiim counts a change found by polling as missed unless an event reported it within the last 2 s. At the 5 s push-mode poll the poll usually comes 2-5 s after the event, so changes the events did deliver were counted as missed. The miss rate passed 50%, pywiim switched to 1 s polling, recovered, and started again about every 10 minutes. The coordinator now sets pywiim's grace period to the poll interval plus 1 s.
+
 ## [1.0.116.3] - 2026-11-01
 
 ### Fixed

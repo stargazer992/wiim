@@ -20,6 +20,9 @@ _LOGGER = logging.getLogger(__name__)
 # Resubscribe when UPnP events stay down this long (e.g. after a network outage).
 UPNP_RESUBSCRIBE_AFTER = 120.0
 UPNP_RESUBSCRIBE_COOLDOWN = 300.0
+# pywiim counts a polled change as missed unless an event arrived within its grace
+# period (2 s, sized for 1 s polling); at slower polling the poll trails the event.
+UPNP_HEALTH_GRACE_MARGIN = 1.0
 _PYWIIM_MISC_LOGGER_NAME = "pywiim.api.misc"
 _LED_READ_FALLBACK_MESSAGE = "LED indicator read not available for device (no API or read failed); assuming on"
 _EXPECTED_PYWIIM_LOG_FILTER_INSTALLED = False
@@ -356,6 +359,15 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if tracker is not None:
             tracker.reset_statistics()
 
+    def _match_upnp_health_grace(self) -> None:
+        """Let pywiim's miss detection wait as long as the poll that checks it."""
+        tracker = getattr(self.player, "_upnp_health_tracker", None)
+        grace = getattr(tracker, "_grace_period", None)
+        if not isinstance(grace, (int, float)):
+            return
+        interval = self.update_interval.total_seconds() if self.update_interval else 5.0
+        tracker._grace_period = max(grace, interval + UPNP_HEALTH_GRACE_MARGIN)
+
     @callback
     def _on_upnp_event(self) -> None:
         """Push UPnP-driven state changes to entities."""
@@ -367,6 +379,7 @@ class WiiMCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Call player.refresh() to poll device and update cached state
             # PollingStrategy determines WHEN to poll (adaptive intervals)
             self._refresh_in_progress = True
+            self._match_upnp_health_grace()
             try:
                 await self.player.refresh()
             finally:
